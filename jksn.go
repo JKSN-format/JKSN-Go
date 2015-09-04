@@ -87,57 +87,62 @@ func Marshal(obj interface{}) (res []byte, err error) {
 }
 
 type jksn_proxy struct {
-    origin      interface{}
-    control     uint8
-    data        []byte
-    buf         []byte
-    children    *list.List
-    hash        *uint8
+    Origin      interface{}
+    Control     uint8
+    Data        []byte
+    Buf         []byte
+    Children    *list.List
+    Hash        *uint8
 }
 
 func new_jksn_proxy(origin interface{}, control uint8, data []byte, buf []byte) (res *jksn_proxy) {
-    res.origin = origin
-    res.control = control
-    res.data = make([]byte, len(data))
-    copy(res.data, data)
-    res.buf = make([]byte, len(buf))
-    copy(res.data, buf)
-    res.children = list.New()
+    res.Origin = origin
+    res.Control = control
+    res.Data = make([]byte, len(data))
+    copy(res.Data, data)
+    res.Buf = make([]byte, len(buf))
+    copy(res.Buf, buf)
+    res.Children = list.New()
     return
 }
 
-func (self *jksn_proxy) output(fp io.Writer, recursive bool) (err error) {
-    control := [1]byte{self.control}
+func (self *jksn_proxy) Output(fp io.Writer, recursive bool) (err error) {
+    control := [1]byte{ self.Control }
     _, err = fp.Write(control[:])
     if err != nil { return }
-    _, err = fp.Write(self.data)
+    _, err = fp.Write(self.Data)
     if err != nil { return }
-    _, err = fp.Write(self.buf)
+    _, err = fp.Write(self.Buf)
     if err != nil { return }
     if recursive {
-        for i := self.children.Front(); i != nil; i = i.Next() {
-            err = i.Value.(*jksn_proxy).output(fp, true)
+        for i := self.Children.Front(); i != nil; i = i.Next() {
+            err = i.Value.(*jksn_proxy).Output(fp, true)
             if err != nil { return }
         }
     }
     return
 }
 
-func (self *jksn_proxy) size(depth uint) (result int64) {
-    result = 1 + int64(len(self.data)) + int64(len(self.buf))
+func (self *jksn_proxy) Len(depth uint) (result int64) {
+    result = 1 + int64(len(self.Data)) + int64(len(self.Buf))
     if depth == 0 {
-        for i := self.children.Front(); i != nil; i = i.Next() {
-            result += i.Value.(*jksn_proxy).size(0);
+        for i := self.Children.Front(); i != nil; i = i.Next() {
+            result += i.Value.(*jksn_proxy).Len(0);
         }
     } else if depth != 1 {
-        for i := self.children.Front(); i != nil; i = i.Next() {
-            result += i.Value.(*jksn_proxy).size(depth-1);
+        for i := self.Children.Front(); i != nil; i = i.Next() {
+            result += i.Value.(*jksn_proxy).Len(depth-1);
         }
     }
     return
 }
 
-type unspecified_value struct {}
+var empty_byte_array = [0]byte{}
+var empty_bytes = empty_byte_array[:]
+
+type unspecified struct {}
+
+var unspecified_value = unspecified{}
 
 type Encoder struct {
     writer io.Writer
@@ -157,7 +162,7 @@ func (self *Encoder) Encode(obj interface{}) (err error) {
     result := self.dump_to_proxy(obj)
     _, err = self.writer.Write([]byte("jk!"))
     if err == nil {
-        err = result.output(self.writer, true)
+        err = result.Output(self.writer, true)
     }
     if self.firsterr != nil {
         return self.firsterr
@@ -182,6 +187,8 @@ func (self *Encoder) dump_value(obj interface{}) *jksn_proxy {
         switch value.Kind() {
             case reflect.Bool:
                 return self.dump_bool(value.Bool())
+            case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+                return self.dump_int(big.NewInt(value.Int()))
             default:
                 self.firsterr = &UnsupportedTypeError{ value.Type() }
                 return self.dump_nil(nil)
@@ -190,17 +197,71 @@ func (self *Encoder) dump_value(obj interface{}) *jksn_proxy {
 }
 
 func (self *Encoder) dump_nil(obj interface{}) *jksn_proxy {
-    return new_jksn_proxy(obj, 0x01, []byte{}, []byte{})
+    return new_jksn_proxy(obj, 0x01, empty_bytes, empty_bytes)
 }
 
-func (self *Encoder) dump_unspecified(obj unspecified_value) *jksn_proxy {
-    return new_jksn_proxy(obj, 0xa0, []byte{}, []byte{})
+func (self *Encoder) dump_unspecified(obj *unspecified) *jksn_proxy {
+    return new_jksn_proxy(obj, 0xa0, empty_bytes, empty_bytes)
 }
 
 func (self *Encoder) dump_bool(obj bool) *jksn_proxy {
     if obj {
-        return new_jksn_proxy(obj, 0x03, []byte{}, []byte{})
+        return new_jksn_proxy(obj, 0x03, empty_bytes, empty_bytes)
     } else {
-        return new_jksn_proxy(obj, 0x02, []byte{}, []byte{})
+        return new_jksn_proxy(obj, 0x02, empty_bytes, empty_bytes)
+    }
+}
+
+func (self *Encoder) dump_int(obj *big.Int) *jksn_proxy {
+    if obj.Sign() >= 0 && obj.Cmp(big.NewInt(0xa)) <= 0 {
+        return new_jksn_proxy(obj, 0x10 | uint8(obj.Uint64()), empty_bytes, empty_bytes)
+    } else if obj.Cmp(big.NewInt(-0x80)) >= 0 && obj.Cmp(big.NewInt(0x7f)) <= 0 {
+        return new_jksn_proxy(obj, 0x1d, self.encode_int(obj, 1), empty_bytes)
+    } else if obj.Cmp(big.NewInt(-0x8000)) >= 0 && obj.Cmp(big.NewInt(0x7fff)) <= 0 {
+        return new_jksn_proxy(obj, 0x1c, self.encode_int(obj, 2), empty_bytes)
+    } else if (
+        (obj.Cmp(big.NewInt(-0x80000000)) >= 0 && obj.Cmp(big.NewInt(-0x200000)) <= 0) &&
+        (obj.Cmp(big.NewInt(0x200000)) >= 0 && obj.Cmp(big.NewInt(0x7fffffff)) <= 0)) {
+        return new_jksn_proxy(obj, 0x1b, self.encode_int(obj, 4), empty_bytes)
+    } else if obj.Sign() >= 0 {
+        return new_jksn_proxy(obj, 0x1f, self.encode_int(obj, 0), empty_bytes)
+    } else {
+        return new_jksn_proxy(obj, 0x1e, self.encode_int(new(big.Int).Neg(obj), 0), empty_bytes)
+    }
+}
+
+func (self *Encoder) encode_int(number *big.Int, size uint) []byte {
+    if size == 1 {
+        return []byte{ uint8(int8(number.Int64())) }
+    } else if size == 2 {
+        number_buf := uint16(int16(number.Int64()))
+        return []byte{
+            uint8(number_buf >> 8),
+            uint8(number_buf),
+        }
+    } else if size == 4 {
+        number_buf := uint32(int32(number.Int64()))
+        return []byte{
+            uint8(number_buf >> 24),
+            uint8(number_buf >> 16),
+            uint8(number_buf >> 8),
+            uint8(number_buf),
+        }
+    } else if size == 0 {
+        if number.Sign() < 0 {
+            panic("jksn: number < 0")
+        }
+        result := []byte{ uint8(new(big.Int).And(number, big.NewInt(0x7f)).Uint64()) }
+        number.Rsh(number, 7)
+        for number.Sign() != 0 {
+            result = append(result, uint8(new(big.Int).And(number, big.NewInt(0x7f)).Uint64()) | 0x80)
+            number.Rsh(number, 7)
+        }
+        for i, j := 0, len(result)-1; i < j; i, j = i+1, j-1 {
+            result[i], result[j] = result[j], result[i]
+        }
+        return result
+    } else {
+        panic("jksn: size not in (1, 2, 4, 0)")
     }
 }

@@ -98,6 +98,7 @@ type jksn_proxy struct {
 }
 
 func new_jksn_proxy(origin interface{}, control uint8, data []byte, buf []byte) (res *jksn_proxy) {
+    res = new(jksn_proxy)
     res.Origin = origin
     res.Control = control
     res.Data = make([]byte, len(data))
@@ -155,6 +156,7 @@ type Encoder struct {
 }
 
 func NewEncoder(writer io.Writer) (res *Encoder) {
+    res = new(Encoder)
     res.writer = writer
     return
 }
@@ -181,11 +183,13 @@ func (self *Encoder) dump_value(obj interface{}) *jksn_proxy {
         return self.dump_nil(nil)
     } else {
         value := reflect.ValueOf(obj)
-        if value.IsNil() {
-            return self.dump_nil(nil)
-        } else {
-            value = reflect.Indirect(value)
-            obj = value.Interface()
+        for value.Kind() == reflect.Ptr {
+            if value.IsNil() {
+                return self.dump_nil(nil)
+            } else {
+                value = reflect.Indirect(value)
+                obj = value.Interface()
+            }
         }
         switch value.Kind() {
             case reflect.Bool:

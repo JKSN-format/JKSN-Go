@@ -22,7 +22,9 @@ package jksn
 import (
     "bytes"
     "container/list"
+    "encoding/binary"
     "io"
+    "math"
     "math/big"
     "reflect"
     "strconv"
@@ -183,12 +185,26 @@ func (self *Encoder) dump_value(obj interface{}) *jksn_proxy {
             return self.dump_nil(nil)
         } else {
             value = reflect.Indirect(value)
+            obj = value.Interface()
         }
         switch value.Kind() {
             case reflect.Bool:
                 return self.dump_bool(value.Bool())
             case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
                 return self.dump_int(big.NewInt(value.Int()))
+            case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32:
+                return self.dump_int(big.NewInt(int64(value.Uint())))
+            case reflect.Uint64: {
+                value_uint64 := value.Uint()
+                value_big := big.NewInt(int64(value_uint64 >> 1))
+                value_big.Lsh(value_big, 1)
+                value_big.Or(value_big, big.NewInt(int64(value_uint64 & 0x1)))
+                return self.dump_int(value_big)
+            }
+            case reflect.Float32:
+                return self.dump_float32(obj.(float32))
+            case reflect.Float64:
+                return self.dump_float64(obj.(float64))
             default:
                 self.firsterr = &UnsupportedTypeError{ value.Type() }
                 return self.dump_nil(nil)
@@ -227,6 +243,41 @@ func (self *Encoder) dump_int(obj *big.Int) *jksn_proxy {
         return new_jksn_proxy(obj, 0x1f, self.encode_int(obj, 0), empty_bytes)
     } else {
         return new_jksn_proxy(obj, 0x1e, self.encode_int(new(big.Int).Neg(obj), 0), empty_bytes)
+    }
+}
+
+func (self *Encoder) dump_float32(obj float32) *jksn_proxy {
+    obj_float64 := float64(obj)
+    if math.IsNaN(obj_float64) {
+        return new_jksn_proxy(obj, 0x20, empty_bytes, empty_bytes)
+    } else if math.IsInf(obj_float64, 1) {
+        return new_jksn_proxy(obj, 0x2f, empty_bytes, empty_bytes)
+    } else if math.IsInf(obj_float64, -1) {
+        return new_jksn_proxy(obj, 0x2e, empty_bytes, empty_bytes)
+    } else {
+        var buf bytes.Buffer
+        binary.Write(&buf, binary.BigEndian, obj)
+        if buf.Len() != 4 {
+            panic("jksn: buf.Len() != 4")
+        }
+        return new_jksn_proxy(obj, 0x2d, buf.Bytes(), empty_bytes)
+    }
+}
+
+func (self *Encoder) dump_float64(obj float64) *jksn_proxy {
+    if math.IsNaN(obj) {
+        return new_jksn_proxy(obj, 0x20, empty_bytes, empty_bytes)
+    } else if math.IsInf(obj, 1) {
+        return new_jksn_proxy(obj, 0x2f, empty_bytes, empty_bytes)
+    } else if math.IsInf(obj, -1) {
+        return new_jksn_proxy(obj, 0x2e, empty_bytes, empty_bytes)
+    } else {
+        var buf bytes.Buffer
+        binary.Write(&buf, binary.BigEndian, obj)
+        if buf.Len() != 8 {
+            panic("jksn: buf.Len() != 8")
+        }
+        return new_jksn_proxy(obj, 0x2c, buf.Bytes(), empty_bytes)
     }
 }
 

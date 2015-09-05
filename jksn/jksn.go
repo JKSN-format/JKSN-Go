@@ -174,7 +174,7 @@ func (self *Encoder) Encode(obj interface{}) (err error) {
 }
 
 func (self *Encoder) dump_to_proxy(obj interface{}) *jksn_proxy {
-    return self.dump_value(obj)
+    return self.optimize(self.dump_value(obj))
 }
 
 func (self *Encoder) dump_value(obj interface{}) *jksn_proxy {
@@ -403,6 +403,10 @@ func (self *Encoder) dump_map(obj map[interface{}]interface{}) (result *jksn_pro
         panic("jksn: len(result.Children) != length*2")
     }
     return result
+}
+
+func (self *Encoder) optimize(obj *jksn_proxy) *jksn_proxy {
+    return obj
 }
 
 func (self *Encoder) encode_int(number *big.Int, size uint) []byte {

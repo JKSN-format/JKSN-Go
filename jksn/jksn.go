@@ -221,8 +221,18 @@ func (self *Encoder) dump_value(obj interface{}) *jksn_proxy {
                 }
                 return self.dump_slice(obj_array)
             }
+        case reflect.Map: {
+            obj_keys := value.MapKeys()
+            obj_map := make(map[interface{}]interface{}, len(obj_keys))
+            for _, key := range obj_keys {
+                obj_map[key.Interface()] = value.MapIndex(key).Interface()
+            }
+            return self.dump_map(obj_map)
+        }
         default:
-            self.firsterr = &UnsupportedTypeError{ value.Type() }
+            if self.firsterr != nil {
+                self.firsterr = &UnsupportedTypeError{ value.Type() }
+            }
             return self.dump_nil(nil)
         }
     }
@@ -372,6 +382,27 @@ func (self *Encoder) encode_straight_slice(obj []interface{}) (result *jksn_prox
 func (self *Encoder) encode_swapped_slice(obj []interface{}) (result *jksn_proxy) {
     // STUB
     return nil
+}
+
+func (self *Encoder) dump_map(obj map[interface{}]interface{}) (result *jksn_proxy) {
+    length := len(obj)
+    if length <= 0xc {
+        result = new_jksn_proxy(obj, 0x90 | uint8(length), empty_bytes, empty_bytes)
+    } else if length <= 0xff {
+        result = new_jksn_proxy(obj, 0x9e, self.encode_int(big.NewInt(int64(length)), 1), empty_bytes)
+    } else if length <= 0xffff {
+        result = new_jksn_proxy(obj, 0x9d, self.encode_int(big.NewInt(int64(length)), 2), empty_bytes)
+    } else {
+        result = new_jksn_proxy(obj, 0x9f, self.encode_int(big.NewInt(int64(length)), 0), empty_bytes)
+    }
+    result.Children = make([]*jksn_proxy, 0, length*2)
+    for key, value := range obj {
+        result.Children = append(result.Children, self.dump_value(key), self.dump_value(value))
+    }
+    if len(result.Children) != length*2 {
+        panic("jksn: len(result.Children) != length*2")
+    }
+    return result
 }
 
 func (self *Encoder) encode_int(number *big.Int, size uint) []byte {

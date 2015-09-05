@@ -21,13 +21,13 @@ package jksn
 
 import (
     "bytes"
-    "container/list"
     "encoding/binary"
     "io"
     "math"
     "math/big"
     "reflect"
     "strconv"
+    "unicode/utf16"
 )
 
 type UnsupportedTypeError struct {
@@ -93,8 +93,8 @@ type jksn_proxy struct {
     Control     uint8
     Data        []byte
     Buf         []byte
-    Children    *list.List
-    Hash        *uint8
+    Children    []*jksn_proxy
+    Hash        uint8
 }
 
 func new_jksn_proxy(origin interface{}, control uint8, data []byte, buf []byte) (res *jksn_proxy) {
@@ -105,7 +105,6 @@ func new_jksn_proxy(origin interface{}, control uint8, data []byte, buf []byte) 
     copy(res.Data, data)
     res.Buf = make([]byte, len(buf))
     copy(res.Buf, buf)
-    res.Children = list.New()
     return
 }
 
@@ -118,8 +117,8 @@ func (self *jksn_proxy) Output(fp io.Writer, recursive bool) (err error) {
     _, err = fp.Write(self.Buf)
     if err != nil { return }
     if recursive {
-        for i := self.Children.Front(); i != nil; i = i.Next() {
-            err = i.Value.(*jksn_proxy).Output(fp, true)
+        for _, i := range self.Children {
+            err = i.Output(fp, true)
             if err != nil { return }
         }
     }
@@ -129,12 +128,12 @@ func (self *jksn_proxy) Output(fp io.Writer, recursive bool) (err error) {
 func (self *jksn_proxy) Len(depth uint) (result int64) {
     result = 1 + int64(len(self.Data)) + int64(len(self.Buf))
     if depth == 0 {
-        for i := self.Children.Front(); i != nil; i = i.Next() {
-            result += i.Value.(*jksn_proxy).Len(0);
+        for _, i := range self.Children {
+            result += i.Len(0);
         }
     } else if depth != 1 {
-        for i := self.Children.Front(); i != nil; i = i.Next() {
-            result += i.Value.(*jksn_proxy).Len(depth-1);
+        for _, i := range self.Children {
+            result += i.Len(depth-1);
         }
     }
     return
@@ -192,26 +191,39 @@ func (self *Encoder) dump_value(obj interface{}) *jksn_proxy {
             }
         }
         switch value.Kind() {
-            case reflect.Bool:
-                return self.dump_bool(value.Bool())
-            case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
-                return self.dump_int(big.NewInt(value.Int()))
-            case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32:
-                return self.dump_int(big.NewInt(int64(value.Uint())))
-            case reflect.Uint64: {
-                value_uint64 := value.Uint()
-                value_big := big.NewInt(int64(value_uint64 >> 1))
-                value_big.Lsh(value_big, 1)
-                value_big.Or(value_big, big.NewInt(int64(value_uint64 & 0x1)))
-                return self.dump_int(value_big)
-            }
-            case reflect.Float32:
-                return self.dump_float32(obj.(float32))
-            case reflect.Float64:
-                return self.dump_float64(obj.(float64))
+        case reflect.Bool:
+            return self.dump_bool(obj.(bool))
+        case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+            return self.dump_int(big.NewInt(value.Int()))
+        case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32:
+            return self.dump_int(big.NewInt(int64(value.Uint())))
+        case reflect.Uint64: {
+            value_uint64 := value.Uint()
+            value_big := big.NewInt(int64(value_uint64 >> 1))
+            value_big.Lsh(value_big, 1)
+            value_big.Or(value_big, big.NewInt(int64(value_uint64 & 0x1)))
+            return self.dump_int(value_big)
+        }
+        case reflect.Float32:
+            return self.dump_float32(obj.(float32))
+        case reflect.Float64:
+            return self.dump_float64(obj.(float64))
+        case reflect.String:
+            return self.dump_string(obj.(string))
+        case reflect.Array, reflect.Slice:
+            switch value.Type().Kind() {
+            case reflect.Uint8:
+                return self.dump_bytes(obj.([]byte))
             default:
-                self.firsterr = &UnsupportedTypeError{ value.Type() }
-                return self.dump_nil(nil)
+                obj_array := make([]interface{}, value.Len())
+                for i := 0; i < value.Len(); i++ {
+                    obj_array[i] = value.Index(i).Interface()
+                }
+                return self.dump_slice(obj_array)
+            }
+        default:
+            self.firsterr = &UnsupportedTypeError{ value.Type() }
+            return self.dump_nil(nil)
         }
     }
 }
@@ -285,6 +297,83 @@ func (self *Encoder) dump_float64(obj float64) *jksn_proxy {
     }
 }
 
+func (self *Encoder) dump_string(obj string) (result *jksn_proxy) {
+    obj_utf16 := utf8_to_utf16le(obj)
+    obj_short, control, length := []byte(obj), uint8(0x40), len(obj)
+    is_utf16 := false
+    if len(obj_utf16) < len(obj) {
+        obj_short, control, length = obj_utf16, 0x30, len(obj_utf16)/2
+        is_utf16 = true
+    }
+    if length <= 0xb {
+        result = new_jksn_proxy(obj, control | uint8(length), empty_bytes, obj_short)
+    } else if !is_utf16 && length == 0xc {
+        result = new_jksn_proxy(obj, control | uint8(length), empty_bytes, obj_short)
+    } else if length <= 0xff {
+        result = new_jksn_proxy(obj, control | 0xe, self.encode_int(big.NewInt(int64(length)), 1), obj_short)
+    } else if length <= 0xffff {
+        result = new_jksn_proxy(obj, control | 0xd, self.encode_int(big.NewInt(int64(length)), 2), obj_short)
+    } else {
+        result = new_jksn_proxy(obj, control | 0xf, self.encode_int(big.NewInt(int64(length)), 0), obj_short)
+    }
+    result.Hash = djb_hash(obj_short)
+    return
+}
+
+func (self *Encoder) dump_bytes(obj []byte) (result *jksn_proxy) {
+    length := len(obj)
+    if length <= 0xb {
+        result = new_jksn_proxy(obj, 0x50 | uint8(length), empty_bytes, obj)
+    } else if length <= 0xff {
+        result = new_jksn_proxy(obj, 0x5e, self.encode_int(big.NewInt(int64(length)), 1), obj)
+    } else if length <= 0xffff {
+        result = new_jksn_proxy(obj, 0x5d, self.encode_int(big.NewInt(int64(length)), 2), obj)
+    } else {
+        result = new_jksn_proxy(obj, 0x5f, self.encode_int(big.NewInt(int64(length)), 0), obj)
+    }
+    result.Hash = djb_hash(obj)
+    return
+}
+
+func (self *Encoder) dump_slice(obj []interface{}) (result *jksn_proxy) {
+    result = self.encode_straight_slice(obj)
+    if self.test_swap_availability(obj) {
+        result_swapped := self.encode_swapped_slice(obj)
+        if result_swapped.Len(3) < result.Len(3) {
+            result = result_swapped
+        }
+    }
+    return
+}
+
+func (self *Encoder) test_swap_availability(obj []interface{}) bool {
+    // STUB
+    return false
+}
+
+func (self *Encoder) encode_straight_slice(obj []interface{}) (result *jksn_proxy) {
+    length := len(obj)
+    if length <= 0xc {
+        result = new_jksn_proxy(obj, 0x80 | uint8(length), empty_bytes, empty_bytes)
+    } else if length <= 0xff {
+        result = new_jksn_proxy(obj, 0x8e, self.encode_int(big.NewInt(int64(length)), 1), empty_bytes)
+    } else if length <= 0xffff {
+        result = new_jksn_proxy(obj, 0x8d, self.encode_int(big.NewInt(int64(length)), 2), empty_bytes)
+    } else {
+        result = new_jksn_proxy(obj, 0x8f, self.encode_int(big.NewInt(int64(length)), 0), empty_bytes)
+    }
+    result.Children = make([]*jksn_proxy, length)
+    for i := 0; i < length; i++ {
+        result.Children[i] = self.dump_value(obj[i])
+    }
+    return
+}
+
+func (self *Encoder) encode_swapped_slice(obj []interface{}) (result *jksn_proxy) {
+    // STUB
+    return nil
+}
+
 func (self *Encoder) encode_int(number *big.Int, size uint) []byte {
     if size == 1 {
         return []byte{ uint8(int8(number.Int64())) }
@@ -320,3 +409,32 @@ func (self *Encoder) encode_int(number *big.Int, size uint) []byte {
         panic("jksn: size not in (1, 2, 4, 0)")
     }
 }
+
+func utf8_to_utf16le(utf8str string) []byte {
+    utf16str := utf16.Encode([]rune(utf8str))
+    utf16lestr := make([]byte, len(utf16str)*2)
+    for i, j := 0, 0; i < len(utf16str); i, j = i+1, j+2 {
+        utf16lestr[j] = uint8(utf16str[i]);
+        utf16lestr[j+1] = uint8(utf16str[i] >> 8);
+    }
+    return utf16lestr
+}
+
+func utf16le_to_utf8(utf16lestr []byte) string {
+    if (len(utf16lestr) & 0x1) != 0 {
+        panic("jksn: len(utf16lestr) not even")
+    }
+    utf16str := make([]uint16, len(utf16lestr)/2)
+    for i, j := 0, 0; i < len(utf16lestr); i, j = i+2, j+1 {
+        utf16str[j] = uint16(utf16lestr[i]) + (uint16(utf16lestr[i+1]) << 8)
+    }
+    return string(utf16.Decode(utf16str))
+}
+
+func djb_hash(obj []byte) (result uint8) {
+    for _, i := range obj {
+        result += (result << 5) + i
+    }
+    return
+}
+

@@ -149,7 +149,7 @@ var unspecified_value = unspecified{}
 type Encoder struct {
     writer io.Writer
     firsterr error
-    lastint big.Int
+    lastint *big.Int
     texthash [256][]byte
     blobhash [256][]byte
 }
@@ -435,7 +435,58 @@ func (self *Encoder) struct_to_map(obj interface{}) (result map[interface{}]inte
 }
 
 func (self *Encoder) optimize(obj *jksn_proxy) *jksn_proxy {
-    // STUB
+    control := obj.Control & 0xf0
+    if control == 0x10 {
+        if self.lastint != nil {
+            origin_int := obj.Origin.(*big.Int)
+            delta := new(big.Int).Sub(origin_int, self.lastint)
+            if new(big.Int).Abs(delta).Cmp(new(big.Int).Abs(origin_int)) < 0 {
+                var new_control uint8
+                var new_data []byte
+                if delta.Sign() >= 0 && delta.Cmp(big.NewInt(0x5)) <= 0 {
+                    new_control, new_data = 0xd0 | uint8(delta.Int64()), empty_bytes
+                } else if delta.Cmp(big.NewInt(-0x5)) >= 0 && delta.Cmp(big.NewInt(-0x1)) <= 0 {
+                    new_control, new_data = 0xd0 | uint8(new(big.Int).Add(delta, big.NewInt(11)).Int64()), empty_bytes
+                } else if delta.Cmp(big.NewInt(-0x80)) >= 0 && delta.Cmp(big.NewInt(0x7f)) <= 0 {
+                    new_control, new_data = 0xdd, self.encode_int(delta, 1)
+                } else if delta.Cmp(big.NewInt(-0x8000)) >= 0 && delta.Cmp(big.NewInt(0x7fff)) <= 0 {
+                    new_control, new_data = 0xdc, self.encode_int(delta, 2)
+                } else if (
+                    (delta.Cmp(big.NewInt(-0x80000000)) >= 0 && delta.Cmp(big.NewInt(-0x200000)) <= 0) ||
+                    (delta.Cmp(big.NewInt(0x200000)) >= 0 && delta.Cmp(big.NewInt(0x7fffffff)) <= 0)) {
+                    new_control, new_data = 0xdb, self.encode_int(delta, 4)
+                } else if delta.Sign() >= 0 {
+                    new_control, new_data = 0xdf, self.encode_int(delta, 0)
+                } else {
+                    new_control, new_data = 0xde, self.encode_int(new(big.Int).Neg(delta), 0)
+                }
+                if len(new_data) < len(obj.Data) {
+                    obj.Control, obj.Data = new_control, new_data
+                }
+            }
+        }
+        self.lastint = obj.Origin.(*big.Int)
+    } else if control == 0x30 || control == 0x40 {
+        if len(obj.Buf) > 1 {
+            if bytes.Equal(self.texthash[obj.Hash], obj.Buf) {
+                obj.Control, obj.Data, obj.Buf = 0x3c, []byte{ obj.Hash }, empty_bytes
+            } else {
+                self.texthash[obj.Hash] = obj.Buf
+            }
+        }
+    } else if control == 0x50 {
+        if len(obj.Buf) > 1 {
+            if bytes.Equal(self.blobhash[obj.Hash], obj.Buf) {
+                obj.Control, obj.Data, obj.Buf = 0x5c, []byte{ obj.Hash }, empty_bytes
+            } else {
+                self.blobhash[obj.Hash] = obj.Buf
+            }
+        }
+    } else {
+        for _, child := range obj.Children {
+            self.optimize(child)
+        }
+    }
     return obj
 }
 

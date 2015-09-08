@@ -356,8 +356,8 @@ func (self *Encoder) dump_bytes(obj []byte) (result *jksn_proxy) {
 
 func (self *Encoder) dump_slice(obj []interface{}) (result *jksn_proxy) {
     result = self.encode_straight_slice(obj)
-    if self.test_swap_availability(obj) {
-        result_swapped := self.encode_swapped_slice(obj)
+    if ok, as_map := self.test_swap_availability(obj); ok {
+        result_swapped := self.encode_swapped_slice(as_map)
         if result_swapped.Len(3) < result.Len(3) {
             result = result_swapped
         }
@@ -365,9 +365,43 @@ func (self *Encoder) dump_slice(obj []interface{}) (result *jksn_proxy) {
     return
 }
 
-func (self *Encoder) test_swap_availability(obj []interface{}) bool {
-    // STUB
-    return false
+func (self *Encoder) test_swap_availability(obj []interface{}) (columns bool, as_map []map[interface{}]interface{}) {
+    as_map = make([]map[interface{}]interface{}, len(obj))
+    for i, row := range obj {
+        value := reflect.ValueOf(row)
+        for value.Kind() == reflect.Ptr {
+            if value.IsNil() {
+                return false, nil
+            } else {
+                value = reflect.Indirect(value)
+                row = value.Interface()
+            }
+        }
+        switch value.Kind() {
+        case reflect.Map:
+            row_keys := value.MapKeys()
+            as_map[i] = make(map[interface{}]interface{}, len(row_keys))
+            for _, key := range row_keys {
+                as_map[i][key.Interface()] = value.MapIndex(key).Interface()
+            }
+            if value.Len() != 0 {
+                columns = true
+            }
+        case reflect.Struct:
+            switch row.(type) {
+            case big.Int:
+                return false, nil
+            default:
+                as_map[i] = self.struct_to_map(obj)
+                if len(as_map[i]) != 0 {
+                    columns = true
+                }
+            }
+        default:
+            return false, nil
+        }
+    }
+    return
 }
 
 func (self *Encoder) encode_straight_slice(obj []interface{}) (result *jksn_proxy) {
@@ -388,9 +422,37 @@ func (self *Encoder) encode_straight_slice(obj []interface{}) (result *jksn_prox
     return
 }
 
-func (self *Encoder) encode_swapped_slice(obj []interface{}) (result *jksn_proxy) {
-    // STUB
-    return nil
+func (self *Encoder) encode_swapped_slice(obj []map[interface{}]interface{}) (result *jksn_proxy) {
+    columns := make(map[interface{}]bool)
+    for _, row := range obj {
+        for column := range row {
+            columns[column] = true
+        }
+    }
+    collen := len(columns)
+    if collen <= 0xc {
+        result = new_jksn_proxy(obj, 0xa0 | uint8(collen), empty_bytes, empty_bytes)
+    } else if collen <= 0xff {
+        result = new_jksn_proxy(obj, 0xae, self.encode_int(big.NewInt(int64(collen)), 1), empty_bytes)
+    } else if collen <= 0xffff {
+        result = new_jksn_proxy(obj, 0xad, self.encode_int(big.NewInt(int64(collen)), 2), empty_bytes)
+    } else {
+        result = new_jksn_proxy(obj, 0xaf, self.encode_int(big.NewInt(int64(collen)), 0), empty_bytes)
+    }
+    result.Children = make([]*jksn_proxy, 0, collen*2)
+    for column := range columns {
+        result.Children = append(result.Children, self.dump_value(column))
+        columns_value := make([]interface{}, len(obj))
+        for i, row := range obj {
+            if item, ok := row[column]; ok {
+                columns_value[i] = self.dump_value(item)
+            } else {
+                columns_value[i] =  self.dump_value(unspecified_value)
+            }
+        }
+        result.Children = append(result.Children, self.dump_slice(columns_value))
+    }
+    return
 }
 
 func (self *Encoder) dump_map(obj map[interface{}]interface{}) (result *jksn_proxy) {

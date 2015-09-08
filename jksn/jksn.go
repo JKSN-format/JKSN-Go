@@ -394,7 +394,7 @@ func (self *Encoder) test_swap_availability(obj []interface{}) (columns bool, as
             case big.Int:
                 return false, nil
             default:
-                as_map[i] = self.struct_to_map(obj)
+                as_map[i] = self.struct_to_map(row)
                 if len(as_map[i]) != 0 {
                     columns = true
                 }

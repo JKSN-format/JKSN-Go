@@ -231,6 +231,8 @@ func (self *Encoder) dump_value(obj interface{}) *jksn_proxy {
         }
         case reflect.Struct:
             switch obj.(type) {
+            case unspecified:
+                return self.dump_unspecified(obj.(unspecified))
             case big.Int: {
                 obj_bigint := obj.(big.Int)
                 return self.dump_int(&obj_bigint)
@@ -251,7 +253,7 @@ func (self *Encoder) dump_nil(obj interface{}) *jksn_proxy {
     return new_jksn_proxy(obj, 0x01, empty_bytes, empty_bytes)
 }
 
-func (self *Encoder) dump_unspecified(obj *unspecified) *jksn_proxy {
+func (self *Encoder) dump_unspecified(obj unspecified) *jksn_proxy {
     return new_jksn_proxy(obj, 0xa0, empty_bytes, empty_bytes)
 }
 

@@ -417,6 +417,7 @@ func (self *Encoder) dump_map(obj map[interface{}]interface{}) (result *jksn_pro
 func (self *Encoder) struct_to_map(obj interface{}) (result map[interface{}]interface{}) {
     obj_value := reflect.ValueOf(obj)
     obj_type := obj_value.Type()
+    result = make(map[interface{}]interface{})
     for field := 0; field < obj_type.NumField(); field++ {
         field_type := obj_type.Field(field)
         tag_name := field_type.Tag.Get("jksn")
@@ -427,7 +428,7 @@ func (self *Encoder) struct_to_map(obj interface{}) (result map[interface{}]inte
             }
         }
         if len(tag_name) != 0 && tag_name != "-" {
-            result[tag_name] = obj_value.Field(field)
+            result[tag_name] = obj_value.Field(field).Interface()
         }
     }
     return

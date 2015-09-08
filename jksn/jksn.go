@@ -447,9 +447,9 @@ func (self *Encoder) encode_swapped_slice(obj []map[interface{}]interface{}) (re
         columns_value := make([]interface{}, len(obj))
         for i, row := range obj {
             if item, ok := row[column]; ok {
-                columns_value[i] = self.dump_value(item)
+                columns_value[i] = item
             } else {
-                columns_value[i] =  self.dump_value(unspecified_value)
+                columns_value[i] = unspecified_value
             }
         }
         result.Children = append(result.Children, self.dump_slice(columns_value))

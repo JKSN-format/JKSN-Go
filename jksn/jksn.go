@@ -229,6 +229,15 @@ func (self *Encoder) dump_value(obj interface{}) *jksn_proxy {
             }
             return self.dump_map(obj_map)
         }
+        case reflect.Struct:
+            switch obj.(type) {
+            case big.Int: {
+                obj_bigint := obj.(big.Int)
+                return self.dump_int(&obj_bigint)
+            }
+            default:
+                return self.dump_map(self.struct_to_map(obj))
+            }
         default:
             if self.firsterr != nil {
                 self.firsterr = &UnsupportedTypeError{ value.Type() }
@@ -405,7 +414,27 @@ func (self *Encoder) dump_map(obj map[interface{}]interface{}) (result *jksn_pro
     return result
 }
 
+func (self *Encoder) struct_to_map(obj interface{}) (result map[interface{}]interface{}) {
+    obj_value := reflect.ValueOf(obj)
+    obj_type := obj_value.Type()
+    for field := 0; field < obj_type.NumField(); field++ {
+        field_type := obj_type.Field(field)
+        tag_name := field_type.Tag.Get("jksn")
+        if len(tag_name) == 0 {
+            tag_name = field_type.Tag.Get("json")
+            if len(tag_name) == 0 {
+                tag_name = field_type.Name
+            }
+        }
+        if len(tag_name) != 0 && tag_name != "-" {
+            result[tag_name] = obj_value.Field(field)
+        }
+    }
+    return
+}
+
 func (self *Encoder) optimize(obj *jksn_proxy) *jksn_proxy {
+    // STUB
     return obj
 }
 

@@ -23,6 +23,8 @@ import (
     "bufio"
     "bytes"
     "encoding/binary"
+    "encoding/json"
+    "fmt"
     "io"
     "math"
     "math/big"
@@ -46,6 +48,15 @@ type UnsupportedValueError struct {
 
 func (self *UnsupportedValueError) Error() string {
     return "jksn: unsupported value: " + self.Str
+}
+
+type SyntaxError struct {
+    msg     string
+    Offset  int64
+}
+
+func (self *SyntaxError) Error() string {
+    return self.msg
 }
 
 type UnmarshalTypeError struct {
@@ -248,9 +259,7 @@ func (self *Encoder) dump_value(obj interface{}) *jksn_proxy {
                 return self.dump_map(self.struct_to_map(obj))
             }
         default:
-            if self.firsterr != nil {
-                self.firsterr = &UnsupportedTypeError{ value.Type() }
-            }
+            self.store_err(&UnsupportedTypeError{ value.Type() })
             return self.dump_nil(nil)
         }
     }
@@ -598,8 +607,16 @@ func (self *Encoder) encode_int(number *big.Int, size uint) []byte {
     }
 }
 
+func (self *Encoder) store_err(err error) error {
+    if self.firsterr == nil {
+        self.firsterr = err
+    }
+    return self.firsterr
+}
+
 type Decoder struct {
     reader      *bufio.Reader
+    readcount   int64
     firsterr    error
     lastint     *big.Int
     texthash    [256][]byte
@@ -621,7 +638,141 @@ func (self *Decoder) Buffered() io.Reader {
 }
 
 func (self *Decoder) Decode(obj interface{}) (err error) {
-    return
+    self.readcount = 0
+    header, header_err := self.reader.Peek(3)
+    if header_err == nil && bytes.Equal(header, []byte("jk!")) {
+        discarded, _ := self.reader.Discard(len(header))
+        if discarded != len(header) {
+            panic("jksn: discarded != len(header)")
+        }
+        self.readcount += int64(discarded)
+    }
+    generic_value := self.load_value()
+    if obj_generic, ok := obj.(*interface{}); ok {
+        *obj_generic = generic_value
+    } else {
+        panic("jksn: unimplemented")
+    }
+    return self.firsterr
+}
+
+func (self *Decoder) load_value() interface{} {
+    for {
+        control, err := self.reader.ReadByte()
+        self.store_err(err)
+        if err != nil {
+            return nil
+        }
+        self.readcount++
+        ctrlhi := control & 0xf0
+        switch ctrlhi {
+        // Special values
+        case 0x00:
+            switch control {
+            case 0x00, 0x01:
+                return nil
+            case 0x02:
+                return false
+            case 0x03:
+                return true
+            case 0x0f: {
+                json_literal := self.load_value()
+                if s, ok := json_literal.(string); ok {
+                    var result interface{}
+                    self.store_err(json.Unmarshal([]byte(s), &result))
+                    return result
+                } else {
+                    self.store_err(&SyntaxError{
+                        "jksn: JKSN value 0x0f requires a string but found: " + reflect.TypeOf(json_literal).String(),
+                        self.readcount,
+                    })
+                }
+            }
+            }
+        // Integers
+        case 0x10:
+            switch control {
+            default:
+                self.lastint = big.NewInt(int64(control & 0xf))
+            case 0x1b:
+                self.lastint = self.unsigned_to_signed(self.decode_int(4), 32)
+            case 0x1c:
+                self.lastint = self.unsigned_to_signed(self.decode_int(2), 16)
+            case 0x1d:
+                self.lastint = self.unsigned_to_signed(self.decode_int(1), 8)
+            case 0x1e:
+                self.lastint = new(big.Int).Neg(self.decode_int(0))
+            case 0x1f:
+                self.lastint = self.decode_int(0)
+            }
+            return self.lastint
+        }
+        self.store_err(&SyntaxError{
+            fmt.Sprintf("jksn: cannot decode JKSN from byte 0x%02x", control),
+            self.readcount-1,
+        })
+        return nil
+    }
+}
+
+func (self *Decoder) decode_int(size uint) *big.Int {
+    if size == 1 {
+        int_byte, err := self.reader.ReadByte()
+        self.readcount++
+        self.store_err(err)
+        return big.NewInt(int64(int_byte))
+    } else if size == 2 {
+        var buf [2]byte
+        for i := range buf {
+            var err error
+            buf[i], err = self.reader.ReadByte()
+            self.readcount++
+            self.store_err(err)
+        }
+        return big.NewInt(int64(buf[0]) << 8 | int64(buf[1]))
+    } else if size == 4 {
+        var buf [4]byte
+        for i := range buf {
+            var err error
+            buf[i], err = self.reader.ReadByte()
+            self.readcount++
+            self.store_err(err)
+        }
+        return big.NewInt(int64(buf[0]) << 24 | int64(buf[1]) << 16 | int64(buf[2]) << 8 | int64(buf[3]))
+    } else if size == 0 {
+        result := new(big.Int)
+        thisbyte := uint8(0xff)
+        for thisbyte & 0x80 != 0 {
+            var err error
+            thisbyte, err = self.reader.ReadByte()
+            self.readcount++
+            self.store_err(err)
+            if err != nil {
+                return new(big.Int)
+            }
+            result.Lsh(result, 7)
+            result.Or(result, big.NewInt(int64(thisbyte & 0x7f)))
+        }
+        return result
+    } else {
+        panic("jksn: size not in (1, 2, 4, 0)")
+    }
+    return new(big.Int)
+}
+
+func (self *Decoder) unsigned_to_signed(x *big.Int, bits uint) *big.Int {
+    // return x - ((x >> (bits - 1)) << bits)
+    temp := new(big.Int)
+    temp.Rsh(x, bits-1)
+    temp.Lsh(temp, bits)
+    return temp.Sub(x, temp)
+}
+
+func (self *Decoder) store_err(err error) error {
+    if self.firsterr == nil {
+        self.firsterr = err
+    }
+    return self.firsterr
 }
 
 func utf8_to_utf16le(utf8str string) []byte {

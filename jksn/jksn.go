@@ -68,7 +68,7 @@ func (self *UnmarshalFieldError) Error() string {
 }
 
 type InvalidUnmarshalError struct {
-    Type reflect.Type
+    Type    reflect.Type
 }
 
 func (self *InvalidUnmarshalError) Error() string {
@@ -147,11 +147,11 @@ type unspecified struct {}
 var unspecified_value = unspecified{}
 
 type Encoder struct {
-    writer io.Writer
-    firsterr error
-    lastint *big.Int
-    texthash [256][]byte
-    blobhash [256][]byte
+    writer      io.Writer
+    firsterr    error
+    lastint     *big.Int
+    texthash    [256][]byte
+    blobhash    [256][]byte
 }
 
 func NewEncoder(writer io.Writer) (res *Encoder) {

@@ -881,7 +881,7 @@ func (self *Decoder) load_value() interface{} {
                 length = self.decode_int(0).Uint64()
             }
             result := make(map[interface{}]interface{}, length)
-            for _ = range result {
+            for i := uint64(0); i < length; i++ {
                 key := self.load_value()
                 result[key] = self.load_value()
             }

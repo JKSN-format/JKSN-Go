@@ -20,6 +20,7 @@
 package jksn
 
 import (
+    "bufio"
     "bytes"
     "encoding/binary"
     "io"
@@ -82,9 +83,15 @@ func (self *InvalidUnmarshalError) Error() string {
 }
 
 func Marshal(obj interface{}) (res []byte, err error) {
-    var buf bytes.Buffer
-    err = NewEncoder(&buf).Encode(obj)
+    buf := new(bytes.Buffer)
+    err = NewEncoder(buf).Encode(obj)
     res = buf.Bytes()
+    return
+}
+
+func Unmarshal(data []byte, obj interface{}) (err error) {
+    buf := bytes.NewBuffer(data)
+    err = NewDecoder(buf).Decode(obj)
     return
 }
 
@@ -543,7 +550,8 @@ func (self *Encoder) optimize(obj *jksn_proxy) *jksn_proxy {
             if bytes.Equal(self.blobhash[obj.Hash], obj.Buf) {
                 obj.Control, obj.Data, obj.Buf = 0x5c, []byte{ obj.Hash }, empty_bytes
             } else {
-                self.blobhash[obj.Hash] = obj.Buf
+                self.blobhash[obj.Hash] = make([]byte, len(obj.Buf))
+                copy(self.blobhash[obj.Hash], obj.Buf)
             }
         }
     } else {
@@ -588,6 +596,32 @@ func (self *Encoder) encode_int(number *big.Int, size uint) []byte {
     } else {
         panic("jksn: size not in (1, 2, 4, 0)")
     }
+}
+
+type Decoder struct {
+    reader      *bufio.Reader
+    firsterr    error
+    lastint     *big.Int
+    texthash    [256][]byte
+    blobhash    [256][]byte
+}
+
+func NewDecoder(reader io.Reader) (res *Decoder) {
+    res = new(Decoder)
+    if buf_reader, ok := reader.(*bufio.Reader); ok {
+        res.reader = buf_reader
+    } else {
+        res.reader = bufio.NewReader(reader)
+    }
+    return
+}
+
+func (self *Decoder) Buffered() io.Reader {
+    return self.reader
+}
+
+func (self *Decoder) Decode(obj interface{}) (err error) {
+    return
 }
 
 func utf8_to_utf16le(utf8str string) []byte {

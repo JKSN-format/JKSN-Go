@@ -648,11 +648,7 @@ func (self *Decoder) Decode(obj interface{}) (err error) {
         self.readcount += int64(discarded)
     }
     generic_value := self.load_value()
-    if obj_generic, ok := obj.(*interface{}); ok {
-        *obj_generic = generic_value
-    } else {
-        panic("jksn: unimplemented")
-    }
+    self.fit_type(obj, generic_value)
     return self.firsterr
 }
 
@@ -1062,6 +1058,14 @@ func (self *Decoder) load_swapped_array(column_length uint) (result []map[interf
         }
     }
     return
+}
+
+func (self *Decoder) fit_type(obj interface{}, generic_value interface{}) {
+    if obj_generic, ok := obj.(*interface{}); ok {
+        *obj_generic = generic_value
+    } else {
+        panic("jksn: unimplemented")
+    }
 }
 
 func (self *Decoder) decode_int(size uint) *big.Int {

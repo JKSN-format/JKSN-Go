@@ -751,7 +751,7 @@ func (self *Decoder) load_value() interface{} {
                     return *self.texthash[hashvalue]
                 } else {
                     self.store_err(&SyntaxError{
-                        Sprintf("JKSN stream requires a non-existing hash: 0x%02x", hashvalue),
+                        fmt.Sprintf("JKSN stream requires a non-existing hash: 0x%02x", hashvalue),
                         self.readcount,
                     })
                     return ""
@@ -794,7 +794,7 @@ func (self *Decoder) load_value() interface{} {
                     return result
                 } else {
                     self.store_err(&SyntaxError{
-                        Sprintf("JKSN stream requires a non-existing hash: 0x%02x", hashvalue),
+                        fmt.Sprintf("JKSN stream requires a non-existing hash: 0x%02x", hashvalue),
                         self.readcount,
                     })
                     return []byte("")
@@ -881,7 +881,7 @@ func (self *Decoder) load_value() interface{} {
                 length = self.decode_int(0).Uint64()
             }
             result := make(map[interface{}]interface{}, length)
-            for i := range result {
+            for _ = range result {
                 key := self.load_value()
                 result[key] = self.load_value()
             }
@@ -908,7 +908,7 @@ func (self *Decoder) load_value() interface{} {
             switch control {
             // Lengthless arrays
             case 0xc8: {
-                result = make([]interface{})
+                result := make([]interface{}, 0)
                 for {
                     item := self.load_value()
                     switch item.(type) {
@@ -1013,6 +1013,57 @@ func (self *Decoder) load_value() interface{} {
     }
 }
 
+func (self *Decoder) load_string_utf8(length uint) string {
+    buf := make([]byte, length)
+    n, err := io.ReadFull(self.reader, buf)
+    self.store_err(err)
+    self.readcount += int64(n)
+    res := string(buf)
+    self.texthash[djb_hash(buf)] = &res
+    return res
+}
+
+func (self *Decoder) load_string_utf16le(length uint) string {
+    buf := make([]byte, length*2)
+    n, err := io.ReadFull(self.reader, buf)
+    self.store_err(err)
+    self.readcount += int64(n)
+    res := utf16le_to_utf8(buf)
+    self.texthash[djb_hash(buf)] = &res
+    return res
+}
+
+func (self *Decoder) load_bytes(length uint) []byte {
+    buf := make([]byte, length)
+    n, err := io.ReadFull(self.reader, buf)
+    self.store_err(err)
+    self.readcount += int64(n)
+    self.blobhash[djb_hash(buf)] = buf
+    res := make([]byte, length)
+    copy(res, buf)
+    return res
+}
+
+func (self *Decoder) load_swapped_array(column_length uint) (result []map[interface{}]interface{}) {
+    for i := uint(0); i < column_length; i++ {
+        column_name := self.load_value()
+        column_values_general := self.load_value()
+        if column_values, ok := column_values_general.([]interface{}); ok {
+            for idx, value := range column_values {
+                if idx == len(result) {
+                    result = append(result, make(map[interface{}]interface{}))
+                }
+                switch value.(type) {
+                case unspecified:
+                default:
+                    result[idx][column_name] = value
+                }
+            }
+        }
+    }
+    return
+}
+
 func (self *Decoder) decode_int(size uint) *big.Int {
     if size == 1 {
         int_byte, err := self.reader.ReadByte()
@@ -1021,21 +1072,15 @@ func (self *Decoder) decode_int(size uint) *big.Int {
         return big.NewInt(int64(int_byte))
     } else if size == 2 {
         var buf [2]byte
-        for i := range buf {
-            var err error
-            buf[i], err = self.reader.ReadByte()
-            self.store_err(err)
-            self.readcount++
-        }
+        n, err := io.ReadFull(self.reader, buf[:])
+        self.store_err(err)
+        self.readcount += int64(n)
         return big.NewInt(int64(buf[0]) << 8 | int64(buf[1]))
     } else if size == 4 {
         var buf [4]byte
-        for i := range buf {
-            var err error
-            buf[i], err = self.reader.ReadByte()
-            self.store_err(err)
-            self.readcount++
-        }
+        n, err := io.ReadFull(self.reader, buf[:])
+        self.store_err(err)
+        self.readcount += int64(n)
         return big.NewInt(int64(buf[0]) << 24 | int64(buf[1]) << 16 | int64(buf[2]) << 8 | int64(buf[3]))
     } else if size == 0 {
         result := new(big.Int)

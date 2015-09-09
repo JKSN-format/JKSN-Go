@@ -2,14 +2,13 @@ package main
 
 import (
     "encoding/json"
-    "flag"
     "os"
     "./jksn"
 )
 
 func main() {
     is_encoding := true
-    for _, arg := range flag.Args() {
+    for _, arg := range os.Args {
         if arg == "-d" {
             is_encoding = false
         }

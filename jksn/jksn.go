@@ -524,9 +524,9 @@ func (self *Encoder) optimize(obj *jksn_proxy) *jksn_proxy {
                 var new_control uint8
                 var new_data []byte
                 if delta.Sign() >= 0 && delta.Cmp(big.NewInt(0x5)) <= 0 {
-                    new_control, new_data = 0xd0 | uint8(delta.Int64()), empty_bytes
+                    new_control, new_data = 0xd0 | uint8(delta.Uint64()), empty_bytes
                 } else if delta.Cmp(big.NewInt(-0x5)) >= 0 && delta.Cmp(big.NewInt(-0x1)) <= 0 {
-                    new_control, new_data = 0xd0 | uint8(new(big.Int).Add(delta, big.NewInt(11)).Int64()), empty_bytes
+                    new_control, new_data = 0xd0 | uint8(new(big.Int).Add(delta, big.NewInt(11)).Uint64()), empty_bytes
                 } else if delta.Cmp(big.NewInt(-0x80)) >= 0 && delta.Cmp(big.NewInt(0x7f)) <= 0 {
                     new_control, new_data = 0xdd, self.encode_int(delta, 1)
                 } else if delta.Cmp(big.NewInt(-0x8000)) >= 0 && delta.Cmp(big.NewInt(0x7fff)) <= 0 {
@@ -619,7 +619,7 @@ type Decoder struct {
     readcount   int64
     firsterr    error
     lastint     *big.Int
-    texthash    [256][]byte
+    texthash    [256]*string
     blobhash    [256][]byte
 }
 
@@ -706,6 +706,304 @@ func (self *Decoder) load_value() interface{} {
                 self.lastint = self.decode_int(0)
             }
             return self.lastint
+        // Floating point numbers
+        case 0x20:
+            switch control {
+            case 0x20:
+                return math.NaN()
+            case 0x2b:
+                self.store_err(&UnmarshalTypeError{
+                    "float80",
+                    reflect.TypeOf(0),
+                    self.readcount,
+                })
+                return math.NaN()
+            case 0x2c: {
+                var result float64
+                self.store_err(binary.Read(self.reader, binary.BigEndian, &result))
+                self.readcount += 8
+                return result
+            }
+            case 0x2d: {
+                var result float32
+                self.store_err(binary.Read(self.reader, binary.BigEndian, &result))
+                self.readcount += 4
+                return result
+            }
+            case 0x2e:
+                return math.Inf(-1)
+            case 0x2f:
+                return math.Inf(1)
+            }
+        // UTF-16 strings
+        case 0x30:
+            switch control {
+            default:
+                return self.load_string_utf16le(uint(control & 0xf))
+            case 0x3c: {
+                hashvalue, err := self.reader.ReadByte()
+                self.store_err(err)
+                if err != nil {
+                    return ""
+                }
+                self.readcount++
+                if self.texthash[hashvalue] != nil {
+                    return *self.texthash[hashvalue]
+                } else {
+                    self.store_err(&SyntaxError{
+                        Sprintf("JKSN stream requires a non-existing hash: 0x%02x", hashvalue),
+                        self.readcount,
+                    })
+                    return ""
+                }
+            }
+            case 0x3d:
+                return self.load_string_utf16le(uint(self.decode_int(2).Uint64()))
+            case 0x3e:
+                return self.load_string_utf16le(uint(self.decode_int(1).Uint64()))
+            case 0x3f:
+                return self.load_string_utf16le(uint(self.decode_int(0).Uint64()))
+            }
+        // UTF-8 strings
+        case 0x40:
+            switch control {
+            default:
+                return self.load_string_utf8(uint(control & 0xf))
+            case 0x4d:
+                return self.load_string_utf8(uint(self.decode_int(2).Uint64()))
+            case 0x4e:
+                return self.load_string_utf8(uint(self.decode_int(1).Uint64()))
+            case 0x4f:
+                return self.load_string_utf8(uint(self.decode_int(0).Uint64()))
+            }
+        // Blob strings
+        case 0x50:
+            switch control {
+            default:
+                return self.load_bytes(uint(control & 0xf))
+            case 0x5c: {
+                hashvalue, err := self.reader.ReadByte()
+                self.store_err(err)
+                if err != nil {
+                    return ""
+                }
+                self.readcount++
+                if self.blobhash[hashvalue] != nil {
+                    result := make([]byte, len(self.blobhash[hashvalue]))
+                    copy(result, self.blobhash[hashvalue])
+                    return result
+                } else {
+                    self.store_err(&SyntaxError{
+                        Sprintf("JKSN stream requires a non-existing hash: 0x%02x", hashvalue),
+                        self.readcount,
+                    })
+                    return []byte("")
+                }
+            }
+            case 0x5d:
+                return self.load_bytes(uint(self.decode_int(2).Uint64()))
+            case 0x5e:
+                return self.load_bytes(uint(self.decode_int(1).Uint64()))
+            case 0x5f:
+                return self.load_bytes(uint(self.decode_int(0).Uint64()))
+            }
+        // Hashtable refreshers
+        case 0x70:
+            switch control {
+            case 0x70:
+                for i := range self.texthash {
+                    self.texthash[i] = nil
+                }
+                for i := range self.blobhash {
+                    self.blobhash[i] = nil
+                }
+            default: {
+                count := control & 0xf
+                for count != 0 {
+                    self.load_value()
+                    count--
+                }
+            }
+            case 0x7d: {
+                count := self.decode_int(2).Uint64()
+                for count != 0 {
+                    self.load_value()
+                    count--
+                }
+            }
+            case 0x7e: {
+                count := self.decode_int(1).Uint64()
+                for count != 0 {
+                    self.load_value()
+                    count--
+                }
+            }
+            case 0x7f: {
+                count := self.decode_int(0)
+                one := big.NewInt(1)
+                for count.Sign() > 0 {
+                    self.load_value()
+                    count.Sub(count, one)
+                }
+            }
+            }
+            continue
+        // Arrays
+        case 0x80: {
+            var length uint64
+            switch control {
+            default:
+                length = uint64(control & 0xf)
+            case 0x8d:
+                length = self.decode_int(2).Uint64()
+            case 0x8e:
+                length = self.decode_int(1).Uint64()
+            case 0x8f:
+                length = self.decode_int(0).Uint64()
+            }
+            result := make([]interface{}, length)
+            for i := range result {
+                result[i] = self.load_value()
+            }
+            return result
+        }
+        // Objects
+        case 0x90: {
+            var length uint64
+            switch control {
+            default:
+                length = uint64(control & 0xf)
+            case 0x9d:
+                length = self.decode_int(2).Uint64()
+            case 0x9e:
+                length = self.decode_int(1).Uint64()
+            case 0x9f:
+                length = self.decode_int(0).Uint64()
+            }
+            result := make(map[interface{}]interface{}, length)
+            for i := range result {
+                key := self.load_value()
+                result[key] = self.load_value()
+            }
+            return result
+        }
+        // Row-col swapped arrays
+        case 0xa0: {
+            var length uint
+            switch control {
+            case 0xa0:
+                return unspecified_value
+            default:
+                length = uint(control & 0xf)
+            case 0xad:
+                length = uint(self.decode_int(2).Uint64())
+            case 0xae:
+                length = uint(self.decode_int(1).Uint64())
+            case 0xaf:
+                length = uint(self.decode_int(0).Uint64())
+            }
+            return self.load_swapped_array(length)
+        }
+        case 0xc0 :
+            switch control {
+            // Lengthless arrays
+            case 0xc8: {
+                result = make([]interface{})
+                for {
+                    item := self.load_value()
+                    switch item.(type) {
+                    default:
+                        result = append(result, item)
+                    case unspecified:
+                        return result
+                    }
+                }
+            }
+            // Padding byte
+            case 0xca:
+                continue
+            }
+        // Delta encoded integers
+        case 0xd0: {
+            var delta *big.Int
+            switch control {
+            case 0xd0, 0xd1, 0xd2, 0xd3, 0xd4, 0xd5:
+                delta = big.NewInt(int64(control & 0xf))
+            case 0xd6, 0xd7, 0xd8, 0xd9, 0xda:
+                delta = big.NewInt(int64(control & 0xf) - 11)
+            case 0xdb:
+                delta = self.decode_int(4)
+            case 0xdc:
+                delta = self.decode_int(2)
+            case 0xdd:
+                delta = self.decode_int(1)
+            case 0xde:
+                delta = self.decode_int(0)
+                delta.Neg(delta)
+            case 0xdf:
+                delta = self.decode_int(0)
+            }
+            if self.lastint != nil {
+                self.lastint.Add(self.lastint, delta)
+                return self.lastint
+            } else {
+                self.store_err(&SyntaxError{
+                    "JKSN stream contains an invalid delta encoded integer",
+                    self.readcount,
+                })
+                return new(big.Int)
+            }
+        }
+        case 0xf0:
+            if control <= 0xf5 {
+                switch control {
+                case 0xf0:
+                    self.reader.Discard(1)
+                    self.readcount++
+                case 0xf1:
+                    self.reader.Discard(4)
+                    self.readcount += 4
+                case 0xf2:
+                    self.reader.Discard(16)
+                    self.readcount += 16
+                case 0xf3:
+                    self.reader.Discard(20)
+                    self.readcount += 20
+                case 0xf4:
+                    self.reader.Discard(32)
+                    self.readcount += 32
+                case 0xf5:
+                    self.reader.Discard(64)
+                    self.readcount += 64
+                }
+                continue
+            } else if control >= 0xf8 && control <= 0xfd {
+                result := self.load_value()
+                switch control {
+                case 0xf8:
+                    self.reader.Discard(1)
+                    self.readcount++
+                case 0xf9:
+                    self.reader.Discard(4)
+                    self.readcount += 4
+                case 0xfa:
+                    self.reader.Discard(16)
+                    self.readcount += 16
+                case 0xfb:
+                    self.reader.Discard(20)
+                    self.readcount += 20
+                case 0xfc:
+                    self.reader.Discard(32)
+                    self.readcount += 32
+                case 0xfd:
+                    self.reader.Discard(64)
+                    self.readcount += 64
+                }
+                return result
+            } else if control == 0xff {
+                self.load_value()
+                continue
+            }
         }
         self.store_err(&SyntaxError{
             fmt.Sprintf("jksn: cannot decode JKSN from byte 0x%02x", control),
@@ -718,16 +1016,16 @@ func (self *Decoder) load_value() interface{} {
 func (self *Decoder) decode_int(size uint) *big.Int {
     if size == 1 {
         int_byte, err := self.reader.ReadByte()
-        self.readcount++
         self.store_err(err)
+        self.readcount++
         return big.NewInt(int64(int_byte))
     } else if size == 2 {
         var buf [2]byte
         for i := range buf {
             var err error
             buf[i], err = self.reader.ReadByte()
-            self.readcount++
             self.store_err(err)
+            self.readcount++
         }
         return big.NewInt(int64(buf[0]) << 8 | int64(buf[1]))
     } else if size == 4 {
@@ -735,8 +1033,8 @@ func (self *Decoder) decode_int(size uint) *big.Int {
         for i := range buf {
             var err error
             buf[i], err = self.reader.ReadByte()
-            self.readcount++
             self.store_err(err)
+            self.readcount++
         }
         return big.NewInt(int64(buf[0]) << 24 | int64(buf[1]) << 16 | int64(buf[2]) << 8 | int64(buf[3]))
     } else if size == 0 {
@@ -745,8 +1043,8 @@ func (self *Decoder) decode_int(size uint) *big.Int {
         for thisbyte & 0x80 != 0 {
             var err error
             thisbyte, err = self.reader.ReadByte()
-            self.readcount++
             self.store_err(err)
+            self.readcount++
             if err != nil {
                 return new(big.Int)
             }

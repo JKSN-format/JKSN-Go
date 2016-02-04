@@ -1078,10 +1078,14 @@ func (self *Decoder) fit_type(obj interface{}, generic_value interface{}) {
             return
         }
     }
-    value.Set(reflect.New(value.Type().Elem()))
+    if value.IsNil() {
+        value.Set(reflect.New(value.Type()))
+    }
     generic_reflect_value := reflect.ValueOf(generic_value)
     obj = value.Interface()
     switch value.Type().Elem().Kind() {
+    case reflect.Interface:
+        *obj.(*interface{}) = generic_value
     case reflect.Ptr:
         self.fit_type(value.Elem().Interface(), generic_value)
     case reflect.Bool:

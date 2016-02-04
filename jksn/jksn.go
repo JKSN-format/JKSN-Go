@@ -1061,10 +1061,63 @@ func (self *Decoder) load_swapped_array(column_length uint) (result []map[interf
 }
 
 func (self *Decoder) fit_type(obj interface{}, generic_value interface{}) {
-    if obj_generic, ok := obj.(*interface{}); ok {
-        *obj_generic = generic_value
-    } else {
-        panic("jksn: unimplemented")
+    if obj == nil {
+        self.store_err(&InvalidUnmarshalError{
+            reflect.TypeOf(obj),
+        })
+        return
+    }
+    value := reflect.ValueOf(obj)
+    if value.Kind() != reflect.Ptr {
+        if value.CanAddr() {
+            value = value.Addr()
+        } else {
+            self.store_err(&InvalidUnmarshalError{
+                reflect.TypeOf(obj),
+            })
+            return
+        }
+    }
+    value.Set(reflect.New(value.Type().Elem()))
+    generic_reflect_value := reflect.ValueOf(generic_value)
+    obj = value.Interface()
+    switch value.Type().Elem().Kind() {
+    case reflect.Ptr:
+        self.fit_type(value.Elem().Interface(), generic_value)
+    case reflect.Bool:
+        switch generic_reflect_value.Kind()  {
+        case reflect.Ptr:
+            switch generic_value.(type) {
+            case *big.Int:
+                *obj.(*bool) = generic_value.(*big.Int).Sign() != 0
+            default:
+                self.store_err(&UnmarshalTypeError{ generic_reflect_value.String(), value.Type(), 0, })
+            }
+        case reflect.Bool:
+            *obj.(*bool) = generic_value.(bool)
+        case reflect.Float32:
+            *obj.(*bool) = generic_value.(float32) != 0
+        case reflect.Float64:
+            *obj.(*bool) = generic_value.(float64) != 0
+        case reflect.String:
+            *obj.(*bool) = len(generic_value.(string)) != 0
+        case reflect.Slice:
+            *obj.(*bool) = len(generic_value.([]interface{})) != 0
+        case reflect.Map:
+            *obj.(*bool) = len(generic_value.(map[interface{}]interface{})) != 0
+        case reflect.Struct:
+            switch generic_value.(type) {
+            case unspecified:
+                *obj.(*bool) = false
+            default:
+                self.store_err(&UnmarshalTypeError{ generic_reflect_value.String(), value.Type(), 0, })
+            }
+        default:
+            self.store_err(&UnmarshalTypeError{ generic_reflect_value.String(), value.Type(), 0, })
+        }
+    // TODO
+    default:
+        self.store_err(&UnmarshalTypeError{ generic_reflect_value.String(), value.Type(), 0, })
     }
 }
 

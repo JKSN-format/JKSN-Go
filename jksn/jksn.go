@@ -1087,9 +1087,34 @@ func (self *Decoder) fit_type(obj interface{}, generic_value interface{}) {
     case reflect.Interface:
         *obj.(*interface{}) = generic_value
     case reflect.Ptr:
-        self.fit_type(value.Elem().Interface(), generic_value)
+        switch obj.(type) {
+        case *big.Int:
+            switch generic_reflect_value.Kind() {
+            case reflect.Ptr:
+                switch generic_value.(type) {
+                case *big.Int:
+                    value.Set(generic_reflect_value)
+                default:
+                    self.fit_type(value.Elem().Interface(), generic_value)
+                }
+            case reflect.Bool:
+                if generic_value.(bool) {
+                    value.Set(reflect.ValueOf(big.NewInt(1)))
+                } else {
+                    value.Set(reflect.ValueOf(big.NewInt(0)))
+                }
+            case reflect.Float32:
+                value.Set(reflect.ValueOf(big.NewInt(int64(generic_value.(float32)))))
+            case reflect.Float64:
+                value.Set(reflect.ValueOf(big.NewInt(int64(generic_value.(float64)))))
+            default:
+                self.fit_type(value.Elem().Interface(), generic_value)
+            }
+        default:
+            self.fit_type(value.Elem().Interface(), generic_value)
+        }
     case reflect.Bool:
-        switch generic_reflect_value.Kind()  {
+        switch generic_reflect_value.Kind() {
         case reflect.Ptr:
             switch generic_value.(type) {
             case *big.Int:
@@ -1119,7 +1144,58 @@ func (self *Decoder) fit_type(obj interface{}, generic_value interface{}) {
         default:
             self.store_err(&UnmarshalTypeError{ generic_reflect_value.String(), value.Type(), 0, })
         }
-    // TODO
+    case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+        switch generic_reflect_value.Kind() {
+        case reflect.Ptr:
+            switch generic_value.(type) {
+            case *big.Int:
+                value.SetInt(generic_value.(*big.Int).Int64())
+            default:
+                self.store_err(&UnmarshalTypeError{ generic_reflect_value.String(), value.Type(), 0, })
+            }
+        case reflect.Bool:
+            if generic_value.(bool) {
+                value.SetInt(1)
+            } else {
+                value.SetInt(0)
+            }
+        case reflect.Float32:
+            value.SetInt(int64(generic_value.(float32)))
+        case reflect.Float64:
+            value.SetInt(int64(generic_value.(float64)))
+        default:
+            self.store_err(&UnmarshalTypeError{ generic_reflect_value.String(), value.Type(), 0, })
+        }
+    case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
+        switch generic_reflect_value.Kind() {
+        case reflect.Ptr:
+            switch generic_value.(type) {
+            case *big.Int:
+                value.SetUint(generic_value.(*big.Int).Uint64())
+            default:
+                self.store_err(&UnmarshalTypeError{ generic_reflect_value.String(), value.Type(), 0, })
+            }
+        case reflect.Bool:
+            if generic_value.(bool) {
+                value.SetUint(1)
+            } else {
+                value.SetUint(0)
+            }
+        case reflect.Float32:
+            value.SetUint(uint64(generic_value.(float32)))
+        case reflect.Float64:
+            value.SetUint(uint64(generic_value.(float64)))
+        default:
+            self.store_err(&UnmarshalTypeError{ generic_reflect_value.String(), value.Type(), 0, })
+        }
+    case reflect.String:
+        *obj.(*string) = generic_reflect_value.String()
+    case reflect.Array, reflect.Slice:
+        panic("TODO") // TODO
+    case reflect.Map:
+        panic("TODO") // TODO
+    case reflect.Struct:
+        panic("TODO") // TODO
     default:
         self.store_err(&UnmarshalTypeError{ generic_reflect_value.String(), value.Type(), 0, })
     }

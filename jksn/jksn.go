@@ -229,7 +229,7 @@ func (self *Encoder) dump_value(obj interface{}) *jksn_proxy {
         case reflect.String:
             return self.dump_string(obj.(string))
         case reflect.Array, reflect.Slice:
-            switch value.Type().Kind() {
+            switch value.Elem().Kind() {
             case reflect.Uint8:
                 return self.dump_bytes(obj.([]byte))
             default:
@@ -1189,9 +1189,45 @@ func (self *Decoder) fit_type(obj interface{}, generic_value interface{}) {
             self.store_err(&UnmarshalTypeError{ generic_reflect_value.String(), value.Type(), 0, })
         }
     case reflect.String:
-        *obj.(*string) = generic_reflect_value.String()
-    case reflect.Array, reflect.Slice:
-        panic("TODO") // TODO
+        switch generic_value.(type) {
+        case string:
+            *obj.(*string) = generic_value.(string)
+        case []byte:
+            *obj.(*string) = string(generic_value.([]byte))
+        default:
+            *obj.(*string) = fmt.Sprintf("%+v", generic_value)
+        }
+    case reflect.Array:
+        switch generic_reflect_value.Kind() {
+        case reflect.String, reflect.Slice: {
+            left_length := value.Len()
+            right_length := generic_reflect_value.Len()
+            if left_length < right_length {
+                self.store_err(&UnmarshalTypeError{ generic_reflect_value.String(), value.Type(), 0, })
+            }
+            for i := 0; i < left_length; i++ {
+                if i < right_length {
+                    self.fit_type(value.Elem().Index(i).Addr().Interface(), generic_reflect_value.Index(i).Interface())
+                } else {
+                    value.Elem().Index(i).Set(reflect.New(value.Type().Elem().Elem()).Elem())
+                }
+            }
+        }
+        default:
+            self.store_err(&UnmarshalTypeError{ generic_reflect_value.String(), value.Type(), 0, })
+        }
+    case reflect.Slice:
+        switch generic_reflect_value.Kind() {
+        case reflect.String, reflect.Slice: {
+            length := generic_reflect_value.Len()
+            value.Elem().Set(reflect.MakeSlice(value.Type().Elem().Elem(), length, length))
+            for i := 0; i < length; i++ {
+                self.fit_type(value.Elem().Index(i).Addr().Interface(), generic_reflect_value.Index(i).Interface())
+            }
+        }
+        default:
+            self.store_err(&UnmarshalTypeError{ generic_reflect_value.String(), value.Type(), 0, })
+        }
     case reflect.Map:
         panic("TODO") // TODO
     case reflect.Struct:

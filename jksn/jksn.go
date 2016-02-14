@@ -1242,6 +1242,19 @@ func (self *Decoder) fit_type(obj interface{}, generic_value interface{}) {
                 value.Elem().SetMapIndex(map_key_fit.Elem(), map_value_fit.Elem())
             }
         }
+        case reflect.Slice, reflect.String: {
+            map_key_type := value.Type().Elem().Key()
+            map_value_type := value.Type().Elem().Elem()
+            value.Elem().Set(reflect.MakeMap(reflect.MapOf(map_key_type, map_value_type)))
+            length := generic_reflect_value.Len()
+            for i := 0; i < length; i++ {
+                map_key_fit := reflect.New(map_key_type)
+                self.fit_type(map_key_fit.Interface(), i)
+                map_value_fit := reflect.New(map_value_type)
+                self.fit_type(map_value_fit.Interface(), generic_reflect_value.Index(i).Interface())
+                value.Elem().SetMapIndex(map_key_fit.Elem(), map_value_fit.Elem())
+            }
+        }
         default:
             self.store_err(&UnmarshalTypeError{ generic_reflect_value.String(), value.Type(), 0, })
         }

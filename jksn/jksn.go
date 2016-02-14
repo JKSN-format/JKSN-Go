@@ -1220,7 +1220,7 @@ func (self *Decoder) fit_type(obj interface{}, generic_value interface{}) {
         switch generic_reflect_value.Kind() {
         case reflect.String, reflect.Slice: {
             length := generic_reflect_value.Len()
-            value.Elem().Set(reflect.MakeSlice(value.Type().Elem().Elem(), length, length))
+            value.Elem().Set(reflect.MakeSlice(reflect.SliceOf(value.Type().Elem().Elem()), length, length))
             for i := 0; i < length; i++ {
                 self.fit_type(value.Elem().Index(i).Addr().Interface(), generic_reflect_value.Index(i).Interface())
             }
@@ -1229,7 +1229,22 @@ func (self *Decoder) fit_type(obj interface{}, generic_value interface{}) {
             self.store_err(&UnmarshalTypeError{ generic_reflect_value.String(), value.Type(), 0, })
         }
     case reflect.Map:
-        panic("TODO") // TODO
+        switch generic_reflect_value.Kind() {
+        case reflect.Map: {
+            map_key_type := value.Type().Elem().Key()
+            map_value_type := value.Type().Elem().Elem()
+            value.Elem().Set(reflect.MakeMap(reflect.MapOf(map_key_type, map_value_type)))
+            for map_key, map_value := range generic_value.(map[interface{}]interface{}) {
+                map_key_fit := reflect.New(map_key_type)
+                self.fit_type(map_key_fit.Interface(), map_key)
+                map_value_fit := reflect.New(map_value_type)
+                self.fit_type(map_value_fit.Interface(), map_value)
+                value.Elem().SetMapIndex(map_key_fit.Elem(), map_value_fit.Elem())
+            }
+        }
+        default:
+            self.store_err(&UnmarshalTypeError{ generic_reflect_value.String(), value.Type(), 0, })
+        }
     case reflect.Struct:
         panic("TODO") // TODO
     default:

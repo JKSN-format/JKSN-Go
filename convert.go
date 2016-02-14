@@ -62,7 +62,7 @@ func filter_map_key(obj *interface{}) {
         keys := value.MapKeys()
         filtered := make(map[string]interface{}, len(keys))
         for _, key := range keys {
-            key_str := fmt.Sprintf("%+v", key.Interface())
+            key_str := fmt.Sprintf("%v", key.Interface())
             new_value := value.MapIndex(key).Interface()
             filter_map_key(&new_value)
             filtered[key_str] = new_value

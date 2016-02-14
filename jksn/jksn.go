@@ -1203,7 +1203,7 @@ func (self *Decoder) fit_type(value reflect.Value, generic_value interface{}) {
         case []byte:
             *obj.(*string) = string(generic_value.([]byte))
         default:
-            *obj.(*string) = fmt.Sprintf("%+v", generic_value)
+            *obj.(*string) = fmt.Sprintf("%v", generic_value)
         }
     case reflect.Array:
         switch generic_reflect_value.Kind() {
@@ -1309,7 +1309,7 @@ func (self *Decoder) find_map_key(generic_map map[interface{}]interface{}, keyna
                 return value, true
             }
         default:
-            if fmt.Sprintf("%+v", key) == keyname {
+            if fmt.Sprintf("%v", key) == keyname {
                 return value, true
             }
         }
@@ -1325,7 +1325,7 @@ func (self *Decoder) find_map_key(generic_map map[interface{}]interface{}, keyna
                 return value, true
             }
         default:
-            if strings.EqualFold(fmt.Sprintf("%+v", key), keyname) {
+            if strings.EqualFold(fmt.Sprintf("%v", key), keyname) {
                 return value, true
             }
         }

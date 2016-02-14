@@ -1153,20 +1153,20 @@ func (self *Decoder) fit_type(obj interface{}, generic_value interface{}) {
         case reflect.Ptr:
             switch generic_value.(type) {
             case *big.Int:
-                value.SetInt(generic_value.(*big.Int).Int64())
+                value.Elem().SetInt(generic_value.(*big.Int).Int64())
             default:
                 self.store_err(&UnmarshalTypeError{ generic_reflect_value.String(), value.Type(), 0, })
             }
         case reflect.Bool:
             if generic_value.(bool) {
-                value.SetInt(1)
+                value.Elem().SetInt(1)
             } else {
-                value.SetInt(0)
+                value.Elem().SetInt(0)
             }
         case reflect.Float32:
-            value.SetInt(int64(generic_value.(float32)))
+            value.Elem().SetInt(int64(generic_value.(float32)))
         case reflect.Float64:
-            value.SetInt(int64(generic_value.(float64)))
+            value.Elem().SetInt(int64(generic_value.(float64)))
         default:
             self.store_err(&UnmarshalTypeError{ generic_reflect_value.String(), value.Type(), 0, })
         }
@@ -1175,20 +1175,20 @@ func (self *Decoder) fit_type(obj interface{}, generic_value interface{}) {
         case reflect.Ptr:
             switch generic_value.(type) {
             case *big.Int:
-                value.SetUint(generic_value.(*big.Int).Uint64())
+                value.Elem().SetUint(generic_value.(*big.Int).Uint64())
             default:
                 self.store_err(&UnmarshalTypeError{ generic_reflect_value.String(), value.Type(), 0, })
             }
         case reflect.Bool:
             if generic_value.(bool) {
-                value.SetUint(1)
+                value.Elem().SetUint(1)
             } else {
-                value.SetUint(0)
+                value.Elem().SetUint(0)
             }
         case reflect.Float32:
-            value.SetUint(uint64(generic_value.(float32)))
+            value.Elem().SetUint(uint64(generic_value.(float32)))
         case reflect.Float64:
-            value.SetUint(uint64(generic_value.(float64)))
+            value.Elem().SetUint(uint64(generic_value.(float64)))
         default:
             self.store_err(&UnmarshalTypeError{ generic_reflect_value.String(), value.Type(), 0, })
         }

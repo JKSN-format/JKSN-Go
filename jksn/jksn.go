@@ -230,8 +230,8 @@ func (self *Encoder) dump_value(obj interface{}) *jksn_proxy {
         case reflect.String:
             return self.dump_string(obj.(string))
         case reflect.Array, reflect.Slice:
-            switch value.Elem().Kind() {
-            case reflect.Uint8:
+            switch obj.(type) {
+            case []byte:
                 return self.dump_bytes(obj.([]byte))
             default:
                 obj_array := make([]interface{}, value.Len())
@@ -649,7 +649,13 @@ func (self *Decoder) Decode(obj interface{}) (err error) {
         self.readcount += int64(discarded)
     }
     generic_value := self.load_value()
-    self.fit_type(obj, generic_value)
+    if obj == nil {
+        self.store_err(&InvalidUnmarshalError{
+            reflect.TypeOf(obj),
+        })
+        return
+    }
+    self.fit_type(reflect.ValueOf(obj), generic_value)
     return self.firsterr
 }
 
@@ -698,11 +704,12 @@ func (self *Decoder) load_value() interface{} {
             case 0x1d:
                 self.lastint = self.unsigned_to_signed(self.decode_int(1), 8)
             case 0x1e:
-                self.lastint = new(big.Int).Neg(self.decode_int(0))
+                self.lastint = self.decode_int(0)
+                self.lastint = self.lastint.Neg(self.lastint)
             case 0x1f:
                 self.lastint = self.decode_int(0)
             }
-            return self.lastint
+            return new(big.Int).Set(self.lastint)
         // Floating point numbers
         case 0x20:
             switch control {
@@ -942,7 +949,7 @@ func (self *Decoder) load_value() interface{} {
             }
             if self.lastint != nil {
                 self.lastint.Add(self.lastint, delta)
-                return self.lastint
+                return new(big.Int).Set(self.lastint)
             } else {
                 self.store_err(&SyntaxError{
                     "JKSN stream contains an invalid delta encoded integer",
@@ -1061,32 +1068,25 @@ func (self *Decoder) load_swapped_array(column_length uint) (result []map[interf
     return
 }
 
-func (self *Decoder) fit_type(obj interface{}, generic_value interface{}) {
-    if obj == nil {
-        self.store_err(&InvalidUnmarshalError{
-            reflect.TypeOf(obj),
-        })
-        return
-    }
-    value := reflect.ValueOf(obj)
+func (self *Decoder) fit_type(value reflect.Value, generic_value interface{}) {
     if value.Kind() != reflect.Ptr {
         if value.CanAddr() {
             value = value.Addr()
         } else {
             self.store_err(&InvalidUnmarshalError{
-                reflect.TypeOf(obj),
+                value.Type(),
             })
             return
         }
     }
     if value.IsNil() || generic_value == nil {
-        value.Set(reflect.New(value.Type()))
+        value.Set(reflect.New(value.Type().Elem()))
     }
     if generic_value == nil {
         return
     }
     generic_reflect_value := reflect.ValueOf(generic_value)
-    obj = value.Interface()
+    obj := value.Interface()
     switch value.Type().Elem().Kind() {
     case reflect.Interface:
         *obj.(*interface{}) = generic_value
@@ -1099,7 +1099,7 @@ func (self *Decoder) fit_type(obj interface{}, generic_value interface{}) {
                 case *big.Int:
                     value.Set(generic_reflect_value)
                 default:
-                    self.fit_type(value.Elem().Interface(), generic_value)
+                    self.fit_type(value.Elem(), generic_value)
                 }
             case reflect.Bool:
                 if generic_value.(bool) {
@@ -1115,7 +1115,7 @@ func (self *Decoder) fit_type(obj interface{}, generic_value interface{}) {
                 self.store_err(&UnmarshalTypeError{ generic_reflect_value.String(), value.Type(), 0, })
             }
         default:
-            self.fit_type(value.Elem().Interface(), generic_value)
+            self.fit_type(value.Elem(), generic_value)
         }
     case reflect.Bool:
         switch generic_reflect_value.Kind() {
@@ -1163,6 +1163,8 @@ func (self *Decoder) fit_type(obj interface{}, generic_value interface{}) {
             } else {
                 value.Elem().SetInt(0)
             }
+        case reflect.Uint8: // for use with []byte
+            value.Elem().SetInt(int64(generic_value.(uint8)))
         case reflect.Float32:
             value.Elem().SetInt(int64(generic_value.(float32)))
         case reflect.Float64:
@@ -1185,6 +1187,8 @@ func (self *Decoder) fit_type(obj interface{}, generic_value interface{}) {
             } else {
                 value.Elem().SetUint(0)
             }
+        case reflect.Uint8: // for use with []byte
+            value.Elem().SetUint(uint64(generic_value.(uint8)))
         case reflect.Float32:
             value.Elem().SetUint(uint64(generic_value.(float32)))
         case reflect.Float64:
@@ -1211,7 +1215,7 @@ func (self *Decoder) fit_type(obj interface{}, generic_value interface{}) {
             }
             for i := 0; i < left_length; i++ {
                 if i < right_length {
-                    self.fit_type(value.Elem().Index(i).Addr().Interface(), generic_reflect_value.Index(i).Interface())
+                    self.fit_type(value.Elem().Index(i).Addr(), generic_reflect_value.Index(i).Interface())
                 } else {
                     value.Elem().Index(i).Set(reflect.New(value.Type().Elem().Elem()).Elem())
                 }
@@ -1226,7 +1230,7 @@ func (self *Decoder) fit_type(obj interface{}, generic_value interface{}) {
             length := generic_reflect_value.Len()
             value.Elem().Set(reflect.MakeSlice(reflect.SliceOf(value.Type().Elem().Elem()), length, length))
             for i := 0; i < length; i++ {
-                self.fit_type(value.Elem().Index(i).Addr().Interface(), generic_reflect_value.Index(i).Interface())
+                self.fit_type(value.Elem().Index(i).Addr(), generic_reflect_value.Index(i).Interface())
             }
         }
         default:
@@ -1240,9 +1244,9 @@ func (self *Decoder) fit_type(obj interface{}, generic_value interface{}) {
             value.Elem().Set(reflect.MakeMap(reflect.MapOf(map_key_type, map_value_type)))
             for map_key, map_value := range generic_value.(map[interface{}]interface{}) {
                 map_key_fit := reflect.New(map_key_type)
-                self.fit_type(map_key_fit.Interface(), map_key)
+                self.fit_type(map_key_fit, map_key)
                 map_value_fit := reflect.New(map_value_type)
-                self.fit_type(map_value_fit.Interface(), map_value)
+                self.fit_type(map_value_fit, map_value)
                 value.Elem().SetMapIndex(map_key_fit.Elem(), map_value_fit.Elem())
             }
         }
@@ -1253,9 +1257,9 @@ func (self *Decoder) fit_type(obj interface{}, generic_value interface{}) {
             length := generic_reflect_value.Len()
             for i := 0; i < length; i++ {
                 map_key_fit := reflect.New(map_key_type)
-                self.fit_type(map_key_fit.Interface(), i)
+                self.fit_type(map_key_fit, i)
                 map_value_fit := reflect.New(map_value_type)
-                self.fit_type(map_value_fit.Interface(), generic_reflect_value.Index(i).Interface())
+                self.fit_type(map_value_fit, generic_reflect_value.Index(i).Interface())
                 value.Elem().SetMapIndex(map_key_fit.Elem(), map_value_fit.Elem())
             }
         }
@@ -1278,7 +1282,7 @@ func (self *Decoder) fit_type(obj interface{}, generic_value interface{}) {
                     }
                 }
                 if ok {
-                    self.fit_type(value.Elem().Field(i).Addr().Interface(), res)
+                    self.fit_type(value.Elem().Field(i).Addr(), res)
                 }
             }
         }

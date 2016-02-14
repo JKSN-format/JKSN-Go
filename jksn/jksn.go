@@ -1112,7 +1112,7 @@ func (self *Decoder) fit_type(obj interface{}, generic_value interface{}) {
             case reflect.Float64:
                 value.Set(reflect.ValueOf(big.NewInt(int64(generic_value.(float64)))))
             default:
-                self.fit_type(value.Elem().Interface(), generic_value)
+                self.store_err(&UnmarshalTypeError{ generic_reflect_value.String(), value.Type(), 0, })
             }
         default:
             self.fit_type(value.Elem().Interface(), generic_value)

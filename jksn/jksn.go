@@ -30,6 +30,7 @@ import (
     "math/big"
     "reflect"
     "strconv"
+    "strings"
     "unicode/utf16"
 )
 
@@ -1078,8 +1079,11 @@ func (self *Decoder) fit_type(obj interface{}, generic_value interface{}) {
             return
         }
     }
-    if value.IsNil() {
+    if value.IsNil() || generic_value == nil {
         value.Set(reflect.New(value.Type()))
+    }
+    if generic_value == nil {
+        return
     }
     generic_reflect_value := reflect.ValueOf(generic_value)
     obj = value.Interface()
@@ -1259,10 +1263,70 @@ func (self *Decoder) fit_type(obj interface{}, generic_value interface{}) {
             self.store_err(&UnmarshalTypeError{ generic_reflect_value.String(), value.Type(), 0, })
         }
     case reflect.Struct:
-        panic("TODO") // TODO
+        switch generic_reflect_value.Kind() {
+        case reflect.Map: {
+            typeof_value := value.Elem().Type()
+            num_field := typeof_value.NumField()
+            generic_map := generic_value.(map[interface{}]interface{})
+            for i := 0; i < num_field; i++ {
+                struct_field := typeof_value.Field(i)
+                res, ok := self.find_map_key(generic_map, struct_field.Tag.Get("jksn"))
+                if !ok {
+                    res, ok = self.find_map_key(generic_map, struct_field.Tag.Get("json"))
+                    if !ok {
+                        res, ok = self.find_map_key(generic_map, struct_field.Name)
+                    }
+                }
+                if ok {
+                    self.fit_type(value.Elem().Field(i).Addr().Interface(), res)
+                }
+            }
+        }
+        default:
+            self.store_err(&UnmarshalTypeError{ generic_reflect_value.String(), value.Type(), 0, })
+        }
     default:
         self.store_err(&UnmarshalTypeError{ generic_reflect_value.String(), value.Type(), 0, })
     }
+}
+
+func (self *Decoder) find_map_key(generic_map map[interface{}]interface{}, keyname string) (res interface{}, ok bool) {
+    if len(keyname) == 0 || keyname == "-" {
+        return nil, false
+    }
+    for key, value := range generic_map {
+        switch key.(type) {
+        case string:
+            if key.(string) == keyname {
+                return value, true
+            }
+        case []byte:
+            if bytes.Equal(key.([]byte), []byte(keyname)) {
+                return value, true
+            }
+        default:
+            if fmt.Sprintf("%+v", key) == keyname {
+                return value, true
+            }
+        }
+    }
+    for key, value := range generic_map {
+        switch key.(type) {
+        case string:
+            if strings.EqualFold(key.(string), keyname) {
+                return value, true
+            }
+        case []byte:
+            if bytes.EqualFold(key.([]byte), []byte(keyname)) {
+                return value, true
+            }
+        default:
+            if strings.EqualFold(fmt.Sprintf("%+v", key), keyname) {
+                return value, true
+            }
+        }
+    }
+    return nil, false
 }
 
 func (self *Decoder) decode_int(size uint) *big.Int {

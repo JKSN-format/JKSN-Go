@@ -2,6 +2,7 @@ package main
 
 import (
     "encoding/json"
+    "fmt"
     "os"
     "reflect"
     "./jksn"
@@ -61,7 +62,7 @@ func filter_map_key(obj *interface{}) {
         keys := value.MapKeys()
         filtered := make(map[string]interface{}, len(keys))
         for _, key := range keys {
-            key_str := reflect.ValueOf(key.Interface()).String()
+            key_str := fmt.Sprintf("%+v", key.Interface())
             new_value := value.MapIndex(key).Interface()
             filter_map_key(&new_value)
             filtered[key_str] = new_value
